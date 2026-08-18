@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "product_query_agent": "./app/agent/studio.py:make_graph"
+  },
+  "env": ".env",
+  "python_version": "3.12"
+}

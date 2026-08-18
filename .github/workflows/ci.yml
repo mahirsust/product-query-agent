@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      # tests/integration exercises the real slowapi rate limiter (app/security/rate_limit.py),
+      # which is backed by settings.redis_url directly — separate from app/cache/redis_client.py,
+      # which unit/integration tests patch with fakeredis instead. Only the limiter needs a real
+      # Redis here.
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - run: uv sync --frozen
+      # Build the same .env the app reads everywhere else, rather than inlining config into the
+      # workflow — one configuration path, so CI can't drift from local/compose behaviour. The
+      # JWT secret is generated per run: throwaway, never a checked-in constant, and long enough
+      # to satisfy app/config.py's minimum if ENV is ever raised above development here.
+      - name: Write CI .env
+        run: |
+          cat > .env <<EOF
+          ENV=development
+          GROQ_API_KEY=
+          JWT_SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+          DATABASE_URL=sqlite:///./ci_test.db
+          REDIS_URL=redis://localhost:6379/0
+          EOF
+      - run: uv run alembic upgrade head
+      - run: uv run pytest tests/unit tests/integration -v
+
+  check-secrets:
+    runs-on: ubuntu-latest
+    outputs:
+      has_groq_key: ${{ steps.check.outputs.has_groq_key }}
+    steps:
+      # Job-level `if:` can't reference the `secrets` context directly (GitHub Actions rejects
+      # it outright) — the standard workaround is a step that reads the secret into a job output,
+      # which downstream jobs *can* reference via `needs.<job>.outputs.*` in their own `if:`.
+      - id: check
+        run: echo "has_groq_key=${{ secrets.GROQ_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+  eval:
+    needs: check-secrets
+    runs-on: ubuntu-latest
+    # DummyJSON needs no credential of its own — GROQ_API_KEY is the only secret this job
+    # depends on, so it skips gracefully (not a failure) when it isn't configured, e.g. on a
+    # first-time fork/PR before repo secrets are set up.
+    if: needs.check-secrets.outputs.has_groq_key == 'true'
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - run: uv sync --frozen
+      # Same single configuration path as the test job — the only difference is that the real
+      # GROQ_API_KEY comes from repo secrets, never from a file in the repo.
+      - name: Write CI .env
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          cat > .env <<EOF
+          ENV=development
+          GROQ_API_KEY=${GROQ_API_KEY}
+          JWT_SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+          DATABASE_URL=sqlite:///./ci_test.db
+          REDIS_URL=redis://localhost:6379/0
+          EOF
+      - run: uv run alembic upgrade head
+      - run: uv run pytest tests/eval -v

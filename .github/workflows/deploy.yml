@@ -1,0 +1,92 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      backend_image: ${{ steps.names.outputs.backend }}
+      frontend_image: ${{ steps.names.outputs.frontend }}
+      sha: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A workflow_run event checks out the default branch's tip by default, which may already
+          # have moved past the commit CI actually validated. Pin to that exact commit so the
+          # image is built from the code that passed.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - id: names
+        # GHCR rejects uppercase characters in image names, and repository names are not
+        # guaranteed lowercase — fold the case rather than relying on the owner's spelling.
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "backend=ghcr.io/${repo}-backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=ghcr.io/${repo}-frontend" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/backend.Dockerfile
+          push: true
+          tags: |
+            ${{ steps.names.outputs.backend }}:latest
+            ${{ steps.names.outputs.backend }}:${{ github.event.workflow_run.head_sha }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/frontend.Dockerfile
+          push: true
+          tags: |
+            ${{ steps.names.outputs.frontend }}:latest
+            ${{ steps.names.outputs.frontend }}:${{ github.event.workflow_run.head_sha }}
+
+  # Render deploys the image built above rather than rebuilding from source. Both services must be
+  # created as image-backed ("Deploy an existing image"), pointing at the same host/repository/name
+  # used here — Render's API only allows the *tag* to differ from the service's configured image.
+  #
+  # The immutable SHA tag is deployed, never `:latest`: the deployed artifact is then exactly the
+  # one CI validated, and rolling back is redeploying an older tag.
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy backend image to Render
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID_BACKEND }}
+          IMAGE: ${{ needs.build-and-push.outputs.backend_image }}:${{ needs.build-and-push.outputs.sha }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"imageUrl\":\"${IMAGE}\"}" \
+            "https://api.render.com/v1/services/${SERVICE_ID}/deploys"
+
+      - name: Deploy frontend image to Render
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID_FRONTEND }}
+          IMAGE: ${{ needs.build-and-push.outputs.frontend_image }}:${{ needs.build-and-push.outputs.sha }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"imageUrl\":\"${IMAGE}\"}" \
+            "https://api.render.com/v1/services/${SERVICE_ID}/deploys"

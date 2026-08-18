@@ -1,0 +1,53 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment variables. The wildcard covers .env.local / .env.prod / .env.bak and any other
+# variant someone creates later; only the value-free reference file is committed.
+.env
+.env.*
+!.env.example
+
+# Local databases
+*.db
+
+# LangGraph Studio dev server's local run/checkpoint store
+.langgraph_api/
+
+# Test / lint / type caches
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov/
+
+# Node (Playwright and similar dev-only tooling)
+node_modules/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# Machine-specific agent settings (permission allowlists, local absolute paths).
+# A shared .claude/settings.json would be committable; this one is not.
+.claude/settings.local.json
+
+# Internal planning, design and assistant-context documents — not part of the
+# shipped project. See README.md for what a consumer of this repo needs.
+CLAUDE.md
+plan.md
+decision.md
+decision.html
+architecture.md
+architecture.html
+pipeline.html

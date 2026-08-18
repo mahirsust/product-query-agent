@@ -1,0 +1,60 @@
+[project]
+name = "product-query-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+# Only what BOTH the backend and the Streamlit frontend import. Everything else lives in a
+# dependency group so each image installs one side, not the union of the two.
+dependencies = [
+    "pydantic-settings>=2.14.2",
+    "python-dotenv>=1.2.2",
+]
+
+[dependency-groups]
+backend = [
+    "alembic>=1.18.5",
+    "bcrypt<4.1",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "langchain>=1.3.14",
+    "langchain-groq>=1.1.3",
+    "langchain-mcp-adapters>=0.3.1",
+    "langgraph>=1.2.10",
+    "langgraph-checkpoint-postgres>=3.1.1",
+    "langsmith>=0.10.12",
+    "mcp<2.0.0",
+    "passlib[bcrypt]>=1.7.4",
+    "psycopg[binary]>=3.3.4",
+    "python-jose[cryptography]>=3.5.0",
+    "redis>=8.1.0",
+    "slowapi>=0.1.10",
+    "sqlalchemy>=2.0.51",
+    "uvicorn>=0.52.1",
+]
+frontend = [
+    "requests>=2.34.2",
+    "streamlit>=1.60.0",
+]
+dev = [
+    "fakeredis>=2.37.0",
+    "langgraph-cli[inmem]>=0.4",
+    "pytest>=9.1.1",
+    "ruff>=0.16.1",
+]
+
+[tool.uv]
+# Local `uv sync`/`uv run` and CI get everything, so day-to-day commands are unchanged by the
+# split. Only the Dockerfiles narrow it, via `--no-default-groups --group <side>`.
+default-groups = ["dev", "backend", "frontend"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
