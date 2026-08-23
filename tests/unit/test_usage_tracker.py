@@ -71,3 +71,59 @@ def test_record_usage_accumulates_across_calls(fake_redis, monkeypatch):
     _run(usage_tracker.record_usage(user_id=5, cost=2.5, tokens=50, calls=1))
     monkeypatch.setattr(settings, "cost_budget_usd_per_user_per_day", 3.9)
     assert _run(usage_tracker.check_and_reserve(user_id=5)) == UsageCheckResult.BUDGET_EXCEEDED
+
+
+def _generous_per_user(monkeypatch) -> None:
+    """Raise every per-user cap so only the account-wide one can trip."""
+    monkeypatch.setattr(settings, "cost_budget_usd_per_user_per_day", 10.0)
+    monkeypatch.setattr(settings, "max_llm_calls_per_user_per_day", 10_000)
+    monkeypatch.setattr(settings, "max_llm_calls_per_minute_per_user", 10_000)
+    monkeypatch.setattr(settings, "max_tokens_per_user_per_day", 10_000_000)
+    monkeypatch.setattr(settings, "max_tokens_per_minute_per_user", 10_000_000)
+
+
+def test_account_cap_trips_on_tokens_spent_by_other_users(fake_redis, monkeypatch):
+    """The gap this cap exists to close: several users, each within their own daily limit,
+    collectively exhausting the provider's account-wide quota."""
+    _generous_per_user(monkeypatch)
+    monkeypatch.setattr(settings, "max_tokens_all_users_per_day", 1_000)
+    for user_id in (1, 2, 3, 4):
+        _run(usage_tracker.record_usage(user_id=user_id, cost=0.0, tokens=250, calls=1))
+
+    # A fifth user who has spent nothing at all is still refused.
+    assert _run(usage_tracker.check_and_reserve(user_id=5)) == UsageCheckResult.ACCOUNT_EXHAUSTED
+
+
+def test_account_cap_allows_traffic_below_the_ceiling(fake_redis, monkeypatch):
+    _generous_per_user(monkeypatch)
+    monkeypatch.setattr(settings, "max_tokens_all_users_per_day", 1_000)
+    _run(usage_tracker.record_usage(user_id=1, cost=0.0, tokens=999, calls=1))
+    assert _run(usage_tracker.check_and_reserve(user_id=2)) == UsageCheckResult.OK
+
+
+def test_account_cap_of_zero_disables_the_check(fake_redis, monkeypatch):
+    """0 must mean "off", not "reject everything" — otherwise a misconfiguration bricks the app."""
+    _generous_per_user(monkeypatch)
+    monkeypatch.setattr(settings, "max_tokens_all_users_per_day", 0)
+    _run(usage_tracker.record_usage(user_id=1, cost=0.0, tokens=999_999, calls=1))
+    assert _run(usage_tracker.check_and_reserve(user_id=2)) == UsageCheckResult.OK
+
+
+def test_per_user_limit_reported_before_account_limit(fake_redis, monkeypatch):
+    """A user over their own share is told that, rather than blaming shared capacity."""
+    _generous_per_user(monkeypatch)
+    monkeypatch.setattr(settings, "max_tokens_per_user_per_day", 100)
+    monkeypatch.setattr(settings, "max_tokens_all_users_per_day", 100)
+    _run(usage_tracker.record_usage(user_id=1, cost=0.0, tokens=500, calls=1))
+    assert _run(usage_tracker.check_and_reserve(user_id=1)) == UsageCheckResult.BUDGET_EXCEEDED
+
+
+def test_account_total_is_recorded_even_when_cap_disabled(fake_redis, monkeypatch):
+    """Usage must accumulate while the cap is off, so enabling it later has real data."""
+    _generous_per_user(monkeypatch)
+    monkeypatch.setattr(settings, "max_tokens_all_users_per_day", 0)
+    _run(usage_tracker.record_usage(user_id=1, cost=0.0, tokens=400, calls=1))
+    _run(usage_tracker.record_usage(user_id=2, cost=0.0, tokens=400, calls=1))
+
+    monkeypatch.setattr(settings, "max_tokens_all_users_per_day", 800)
+    assert _run(usage_tracker.check_and_reserve(user_id=3)) == UsageCheckResult.ACCOUNT_EXHAUSTED

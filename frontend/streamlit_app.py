@@ -172,6 +172,12 @@ def _render_chat_screen() -> None:
                     )
                 elif exc.status_code == 402:
                     st.warning("Daily usage budget exhausted for this account. Try again tomorrow.")
+                elif exc.status_code == 503:
+                    # Distinct from 402 on purpose: nothing the user did caused this.
+                    st.warning(
+                        "The service has reached its shared daily capacity across all users. "
+                        "This isn't a limit on your account — please try again tomorrow."
+                    )
                 else:
                     st.error(f"Something went wrong: {exc.detail}")
             except requests.exceptions.RequestException:

@@ -16,11 +16,18 @@ _MINUTE_TTL_SECONDS = 60
 
 
 class UsageCheckResult(StrEnum):
-    """Why a request may proceed or not. The caller maps these to 429 and 402 respectively."""
+    """Why a request may proceed or not.
+
+    The caller maps these to 429, 402 and 503. `ACCOUNT_EXHAUSTED` is kept distinct from
+    `BUDGET_EXCEEDED` because they mean opposite things to the person reading the message: one is
+    "you have used your share", the other is "the service is out of capacity and you did nothing
+    wrong".
+    """
 
     OK = "ok"
     RATE_LIMITED = "rate_limited"
     BUDGET_EXCEEDED = "budget_exceeded"
+    ACCOUNT_EXHAUSTED = "account_exhausted"
 
 
 def _today() -> str:
@@ -39,6 +46,11 @@ def _daily_key(metric: str, user_id: int) -> str:
 def _minute_key(metric: str, user_id: int) -> str:
     """Redis key for a per-user per-minute counter, likewise self-expiring by name."""
     return f"rate:{metric}:{user_id}:{_current_minute()}"
+
+
+def _account_daily_key(metric: str) -> str:
+    """Redis key for a daily counter shared by every user — deliberately not user-scoped."""
+    return f"usage:account:{metric}:{_today()}"
 
 
 async def check_and_reserve(user_id: int) -> UsageCheckResult:
@@ -72,6 +84,14 @@ async def check_and_reserve(user_id: int) -> UsageCheckResult:
     if int(daily_tokens or 0) >= settings.max_tokens_per_user_per_day:
         return UsageCheckResult.BUDGET_EXCEEDED
 
+    # Checked last so a user who is over their own share is told that, rather than being blamed on
+    # the service. Zero disables the cap; without that escape hatch a misconfigured 0 would reject
+    # every request.
+    if settings.max_tokens_all_users_per_day > 0:
+        account_tokens = await client.get(_account_daily_key("tokens"))
+        if int(account_tokens or 0) >= settings.max_tokens_all_users_per_day:
+            return UsageCheckResult.ACCOUNT_EXHAUSTED
+
     return UsageCheckResult.OK
 
 
@@ -91,5 +111,10 @@ async def record_usage(user_id: int, cost: float, tokens: int, calls: int = 1) -
     pipe.expire(_minute_key("calls", user_id), _MINUTE_TTL_SECONDS)
     pipe.incrby(_minute_key("tokens", user_id), tokens)
     pipe.expire(_minute_key("tokens", user_id), _MINUTE_TTL_SECONDS)
+
+    # Account-wide total, incremented by every user into one key. Recorded unconditionally even
+    # when the cap is disabled, so turning it on later has real usage to compare against.
+    pipe.incrby(_account_daily_key("tokens"), tokens)
+    pipe.expire(_account_daily_key("tokens"), _DAY_TTL_SECONDS)
 
     await pipe.execute()

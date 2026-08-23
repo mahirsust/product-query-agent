@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -61,6 +63,11 @@ def app(test_engine):
     test_app.include_router(health.router)
     test_app.dependency_overrides[get_session] = override_get_session
     test_app.state.agent = None
+    # Pre-set: the real app builds the agent in a background task and `get_agent` waits on this
+    # event. Tests supply `app.state.agent` directly, so warm-up is already "done" as far as they
+    # are concerned — leaving it clear would make every agent-backed test block for 60s.
+    test_app.state.agent_ready = asyncio.Event()
+    test_app.state.agent_ready.set()
     return test_app
 
 

@@ -2,7 +2,8 @@ import asyncio
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from app.cache import response_cache
+from app.api import deps
+from app.cache import response_cache, usage_tracker
 from app.config import settings
 from app.db.repository import create_user
 from app.security.auth import create_access_token, hash_password
@@ -104,6 +105,31 @@ def test_chat_budget_exceeded_returns_402(client, app, db_session, fake_redis, m
     assert fake_agent.invoked_with is None
 
 
+def test_chat_account_capacity_exhausted_returns_503(
+    client, app, db_session, fake_redis, monkeypatch
+):
+    """503, not 402: this user is within every personal limit — the shared quota ran out. The
+    status code is what tells them it is not their fault, so it is asserted rather than assumed."""
+    monkeypatch.setattr(settings, "cost_budget_usd_per_user_per_day", 10.0)
+    monkeypatch.setattr(settings, "max_tokens_per_user_per_day", 10_000_000)
+    monkeypatch.setattr(settings, "max_tokens_all_users_per_day", 100)
+    # Spent by a *different* user, so the caller under test has consumed nothing.
+    asyncio.run(usage_tracker.record_usage(user_id=999, cost=0.0, tokens=500, calls=1))
+
+    user, token = _user_and_token(db_session)
+    fake_agent = FakeAgent(response_messages=[AIMessage(content="should not be reached")])
+    app.state.agent = fake_agent
+
+    resp = client.post(
+        "/chat",
+        json={"question": "another question never asked before", "thread_id": "t1"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 503
+    assert fake_agent.invoked_with is None
+
+
 def test_chat_rate_limited_returns_429(client, app, db_session, fake_redis, monkeypatch):
     monkeypatch.setattr(settings, "cost_budget_usd_per_user_per_day", 10.0)
     monkeypatch.setattr(settings, "max_llm_calls_per_minute_per_user", 0)
@@ -189,3 +215,53 @@ def test_one_users_cached_answer_is_never_served_to_another(
     assert resp.status_code == 200
     assert "1000" not in resp.json()["answer"]
     assert resp.json()["answer"] == "fresh answer for B"
+
+
+def test_chat_returns_503_while_agent_is_warming_up(
+    client, app, db_session, fake_redis, monkeypatch
+):
+    """Cold start: the socket is open and auth works, but the agent is not built yet. The wait is
+    capped so a failed warm-up cannot hang a request forever."""
+    monkeypatch.setattr(settings, "cost_budget_usd_per_user_per_day", 10.0)
+    monkeypatch.setattr(deps, "AGENT_READY_TIMEOUT_SECONDS", 0.05)
+    app.state.agent_ready.clear()
+    app.state.agent = None
+    _, token = _user_and_token(db_session)
+
+    resp = client.post(
+        "/chat",
+        json={"question": "a question during warm-up", "thread_id": "t1"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 503
+    assert "starting up" in resp.json()["detail"]
+
+
+def test_chat_proceeds_once_warm_up_completes(client, app, db_session, fake_redis, monkeypatch):
+    """The same request succeeds once the event is set — the gate is readiness, not a broken route."""
+    monkeypatch.setattr(settings, "cost_budget_usd_per_user_per_day", 10.0)
+    app.state.agent_ready.clear()
+    app.state.agent = FakeAgent(response_messages=[AIMessage(content="warm now")])
+    app.state.agent_ready.set()
+    _, token = _user_and_token(db_session)
+
+    resp = client.post(
+        "/chat",
+        json={"question": "a question after warm-up", "thread_id": "t1"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["answer"] == "warm now"
+
+
+def test_readyz_is_503_until_the_agent_is_built(client, app):
+    """/readyz must not claim ready while the process cannot answer anything. Platform health
+    checks belong on /healthz, which stays 200 as soon as the socket is open."""
+    app.state.agent_ready.clear()
+    assert client.get("/readyz").status_code == 503
+    assert client.get("/healthz").status_code == 200
+
+    app.state.agent_ready.set()
+    assert client.get("/readyz").status_code == 200

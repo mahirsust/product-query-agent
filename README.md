@@ -1,11 +1,19 @@
 # Product Query Agent
 
+[![CI](https://github.com/mahirsust/product-query-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mahirsust/product-query-agent/actions/workflows/ci.yml)
+[![Deploy](https://github.com/mahirsust/product-query-agent/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/mahirsust/product-query-agent/actions/workflows/deploy.yml)
+[![Live](https://img.shields.io/badge/live-render-46E3B7)](https://product-query-agent-frontend-latest.onrender.com)
+
 A production-shaped LangChain/LangGraph tool-calling agent that answers questions about product
 prices, specs, stock and reviews. It runs as a Streamlit chat UI over a FastAPI backend, with JWT
 auth, Postgres, Redis, and product data fetched through an MCP server from the public
 [DummyJSON](https://dummyjson.com/docs/products) catalogue.
 
 The LLM backend is Groq (`openai/gpt-oss-120b`).
+
+**Live demo:** <https://product-query-agent-frontend-latest.onrender.com> — sign up with any
+username to try it. Hosted on Render's free tier, so the first request after an idle period takes
+30–60 seconds while the service wakes.
 
 ## Features
 
@@ -123,6 +131,7 @@ CI generates a throwaway `.env` so it exercises the same configuration path as a
 | `MAX_LLM_CALLS_PER_MINUTE_PER_USER` | `15` | Per-minute LLM call burst guard |
 | `MAX_TOKENS_PER_USER_PER_DAY` | `30000` | Daily per-user token cap |
 | `MAX_TOKENS_PER_MINUTE_PER_USER` | `4000` | Per-minute token burst guard. **Keep it below the provider's tokens-per-minute ceiling** (8,000 for `openai/gpt-oss-120b`) so this cap rejects first, with your error, instead of the provider returning 429. It is per user while the provider's is per account, so the value also decides how many users can be active in the same minute — 4,000 allows two |
+| `MAX_TOKENS_ALL_USERS_PER_DAY` | `180000` | **Account-wide, not per user** — the only shared limit. Per-user caps divide the provider's quota but never sum to it: enough users each staying under their own daily cap can exhaust the account between them. Keep it below the provider's daily quota (200,000). Exceeding it returns **503**, not 402, since the caller is within their own limits. `0` disables the check |
 | `RESPONSE_CACHE_TTL_SECONDS` | `300` | TTL for cached final answers (scoped per user) |
 | `PRODUCT_CACHE_TTL_SECONDS` | `86400` | TTL for cached product/review rows; a stale row is still served if DummyJSON is unreachable |
 | `CORS_ORIGINS` | `""` | Comma-separated **browser** origins allowed to call the backend. Empty is correct by default — the Streamlit frontend calls the API server-side, so no browser cross-origin request occurs. Setting `*` automatically disables credentialed CORS |
@@ -240,8 +249,27 @@ Two things that are already handled, so you do not need to work around them:
 - **Database URL.** Paste Render's Postgres URL unchanged — `postgres://` is normalised to
   `postgresql+psycopg://` on load.
 
-Migrations run automatically: the backend image's entrypoint executes `alembic upgrade head`
-before starting uvicorn.
+**Point the platform health check at `/healthz`, not `/readyz`.** `/healthz` answers as soon as the
+socket is open; `/readyz` deliberately returns 503 until the agent has finished warming up, which
+would fail a deploy.
+
+Migrations run automatically — inside the app's background warm-up task, not the container
+entrypoint. That keeps ~59s of migration work off the path to binding a port, which a small
+instance cannot afford (see "Startup" below). It also means migrations happen in-process: fine for
+a single instance, but several replicas would race on startup, and the fix then is a pre-deploy
+migration step.
+
+### Startup
+
+The lifespan yields immediately and builds the agent in a background task, because uvicorn binds
+its socket only *after* the lifespan returns — and platforms fail a deploy when no port appears in
+time. Measured on a 0.1-CPU instance: port open at ~153s (was ~240s), fully ready at ~240s.
+
+While warming, `/chat` waits up to 60 seconds for the agent and then returns 503, so the first
+visitor after a cold start gets a slow answer rather than an error.
+
+On a small free instance the app is slow to start and, because such instances spin down when idle,
+pays that cost on every cold start. A 0.5-CPU instance removes the problem outright.
 
 ## Project structure
 

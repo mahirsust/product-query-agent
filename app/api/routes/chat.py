@@ -1,8 +1,6 @@
 """Chat endpoint: the authenticated entry point to the agent."""
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from langchain_core.messages import ToolMessage
-from langgraph.errors import GraphRecursionError
 
 from app.api.deps import get_agent, get_current_user
 from app.api.schemas import ChatRequest, ChatResponse
@@ -39,6 +37,13 @@ async def chat(
     is exceeded and 402 when a daily cap is exhausted — distinct so the caller knows whether
     retrying soon will help.
     """
+    # Imported per call rather than at module scope: `langgraph.errors` and
+    # `langchain_core.messages` cost ~29s to import on a 0.1-CPU instance, all of it before uvicorn
+    # binds its socket. After the first call they are already in sys.modules, so the lookup is
+    # free. See app/main.py for why startup import cost matters here.
+    from langchain_core.messages import ToolMessage
+    from langgraph.errors import GraphRecursionError
+
     set_correlation_id(_namespaced_thread_id(current_user.id, payload.thread_id))
     config = {
         "configurable": {"thread_id": _namespaced_thread_id(current_user.id, payload.thread_id)},
@@ -69,6 +74,13 @@ async def chat(
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail="Daily usage budget exhausted for this account.",
+        )
+    # 503, not 402: the caller is within their own limits and the service is out of shared
+    # capacity. Telling them they are over budget would be actively misleading.
+    if usage_check == UsageCheckResult.ACCOUNT_EXHAUSTED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The service has reached its daily capacity. Please try again tomorrow.",
         )
 
     try:

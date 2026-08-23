@@ -86,6 +86,15 @@ class Settings(BaseSettings):
     # among users is the only protection the account-wide limit gets.
     max_tokens_per_minute_per_user: int = 4_000
 
+    # --- Account-wide cap: the only limit here that is not per user ---
+    # The per-user caps divide the provider's quota but never sum to it: N users each staying under
+    # `max_tokens_per_user_per_day` can still exhaust the account between them, at which point the
+    # provider starts returning 429s that no app-level limit ever anticipated. This is the
+    # aggregate backstop. Keep it below the provider's daily token quota for `llm_model`
+    # (openai/gpt-oss-120b allows 200k TPD), so the app degrades with its own message and some
+    # headroom is left for the Prompt Guard classifier. 0 disables the check entirely.
+    max_tokens_all_users_per_day: int = 180_000
+
     # --- Caching ---
     response_cache_ttl_seconds: int = 300
     product_cache_ttl_seconds: int = 86_400

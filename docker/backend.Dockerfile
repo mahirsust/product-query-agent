@@ -31,11 +31,12 @@ USER appuser
 
 EXPOSE 8000
 
-# alembic upgrade head must run before uvicorn starts — the app has no auto-create-tables
-# fallback (see CLAUDE.md's migration gotcha), so a fresh DB with no migrations applied fails
-# every DB-touching request with "no such table"/"relation does not exist".
+# Migrations are NOT run here. They cost ~59s on a small instance, entirely before uvicorn starts,
+# and the platform sees that as a container with no open port. They run inside the app's background
+# warm-up task instead (app/main.py), so they still happen automatically — see CLAUDE.md's
+# migration gotcha for why they can never simply be skipped.
 #
 # $PORT rather than a literal: platforms such as Render assign the port at runtime and route to it,
 # so a hardcoded 8000 leaves the container listening where nothing connects. The default keeps
 # docker-compose and local runs unchanged.
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
