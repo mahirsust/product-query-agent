@@ -46,6 +46,32 @@ def _extract_numbers(text: str) -> set[str]:
     return {_canonical(match.group()) for match in _NUMBER_PATTERN.finditer(text)}
 
 
+def _with_derived_discounts(numbers: set[str]) -> set[str]:
+    """Extend a grounded set with the prices implied by applying a grounded percentage to it.
+
+    Products carry `price` and `discountPercentage` separately, and a model asked about price
+    routinely states the discounted figure too — `$79.99` less `14.39%` is `$68.48`. That value is
+    arithmetic over two grounded numbers, not an invention, but it appears nowhere in the tool
+    output, so without this every discounted-price answer reads as a fabricated claim.
+
+    Only percentage-shaped operands are applied, which keeps this from admitting the product of
+    any two numbers that happen to appear together.
+    """
+    values = []
+    for number in numbers:
+        try:
+            values.append(float(number))
+        except ValueError:
+            continue
+
+    derived = set()
+    for amount in values:
+        for percent in values:
+            if 0 < percent < 100:
+                derived.add(_canonical(f"{round(amount * (1 - percent / 100), 2)}"))
+    return numbers | derived
+
+
 def _is_infrastructure_error(content: str) -> bool:
     """Whether the answer is a model-failure notice rather than a real reply.
 
@@ -114,7 +140,10 @@ class GroundednessMiddleware(AgentMiddleware):
         )
         question_text = str(last_human.content) if last_human else ""
 
-        grounded = _extract_numbers(tool_text) | _extract_numbers(question_text)
+        # Derived values are computed from tool output only — the question and stored preferences
+        # are the user's own words, not a source of catalogue arithmetic.
+        grounded = _with_derived_discounts(_extract_numbers(tool_text))
+        grounded |= _extract_numbers(question_text)
 
         user_id = runtime.context.user_id if runtime.context else None
         if user_id is not None and runtime.store is not None:

@@ -189,3 +189,45 @@ def test_model_retry_failure_message_skipped():
         "{'error': {'message': 'Rate limit reached ... Limit 100000, Used 99516 ...'}}",
     )
     assert not records
+
+
+def test_discounted_price_not_flagged():
+    """The exact CI failure: 79.99 less 14.39% is 68.48, arithmetic over two grounded numbers."""
+    records = _check(
+        "what is the price of the gucci bloom perfume?",
+        str({"price": 79.99, "discountPercentage": 14.39, "rating": 4.71}),
+        "The Gucci Bloom is $79.99, or $68.48 with the 14.39% discount applied.",
+    )
+    assert not records
+
+
+def test_discounted_price_rounded_to_whole_currency_not_flagged():
+    records = _check(
+        "how much is it after the discount?",
+        str({"price": 100.0, "discountPercentage": 32.0}),
+        "That works out to $68 after the discount.",
+    )
+    assert not records
+
+
+def test_derived_values_do_not_ground_an_unrelated_number():
+    """The relaxation must stay narrow: a fabricated price is still caught."""
+    records = _check(
+        "what is the price of the gucci bloom perfume?",
+        str({"price": 79.99, "discountPercentage": 14.39}),
+        "The Gucci Bloom is $54321.",
+    )
+    assert len(records) == 1
+    assert records[0].__dict__["ungrounded_numbers"] == ["54321"]
+
+
+def test_non_percentage_operands_do_not_create_derived_values():
+    """Only percentage-shaped numbers are applied, so two large numbers cannot manufacture a
+    third that then launders a hallucination."""
+    records = _check(
+        "how many are in stock?",
+        str({"price": 1999.99, "stock": 150}),
+        "There are 1200 units in stock.",
+    )
+    assert len(records) == 1
+    assert records[0].__dict__["ungrounded_numbers"] == ["1200"]
