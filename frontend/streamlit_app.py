@@ -64,8 +64,13 @@ def _render_auth_screen() -> None:
 
     with tab_login:
         with st.form("login_form"):
-            username = st.text_input("Username", key="login_username")
-            password = st.text_input("Password", type="password", key="login_password")
+            # Explicit autocomplete values: Streamlit otherwise emits an empty attribute, which
+            # browsers flag and which stops password managers offering saved credentials.
+            # "current-password" (not "new-password") tells them to fill an existing login.
+            username = st.text_input("Username", key="login_username", autocomplete="username")
+            password = st.text_input(
+                "Password", type="password", key="login_password", autocomplete="current-password"
+            )
             submitted = st.form_submit_button("Log in")
         if submitted:
             try:
@@ -83,8 +88,12 @@ def _render_auth_screen() -> None:
 
     with tab_signup:
         with st.form("signup_form"):
-            username = st.text_input("Username", key="signup_username")
-            password = st.text_input("Password", type="password", key="signup_password")
+            # "new-password" here, so password managers offer to generate and save one rather
+            # than autofilling an existing credential into a registration field.
+            username = st.text_input("Username", key="signup_username", autocomplete="username")
+            password = st.text_input(
+                "Password", type="password", key="signup_password", autocomplete="new-password"
+            )
             submitted = st.form_submit_button("Sign up")
         if submitted:
             try:
@@ -172,12 +181,12 @@ def _render_chat_screen() -> None:
                     )
                 elif exc.status_code == 402:
                     st.warning("Daily usage budget exhausted for this account. Try again tomorrow.")
-                elif exc.status_code == 503:
-                    # Distinct from 402 on purpose: nothing the user did caused this.
-                    st.warning(
-                        "The service has reached its shared daily capacity across all users. "
-                        "This isn't a limit on your account — please try again tomorrow."
-                    )
+                elif exc.status_code in (502, 503, 504):
+                    # 503 means several different things — shared capacity exhausted, the agent
+                    # still warming up after a cold start, or the platform's own gateway error.
+                    # The backend already words each one for a user, so show what it sent rather
+                    # than guessing which case this is from the status code alone.
+                    st.warning(exc.detail)
                 else:
                     st.error(f"Something went wrong: {exc.detail}")
             except requests.exceptions.RequestException:

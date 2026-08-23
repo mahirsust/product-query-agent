@@ -7,10 +7,15 @@ in-process state.
 import requests
 from config import BACKEND_URL
 
-_AUTH_TIMEOUT_SECONDS = 10
-# A tool-using turn can involve several model calls plus retries, so this is far longer than the
-# auth endpoints need.
-_CHAT_TIMEOUT_SECONDS = 90
+# Generous even for a trivial request: on a platform that spins idle services down, the first call
+# after a quiet period pays for the whole wake-up. Measured at 52s on Render's free tier, where a
+# 10s timeout failed every cold start before the backend could answer.
+_AUTH_TIMEOUT_SECONDS = 90
+# A tool-using turn can involve several model calls plus retries, on top of any wake-up.
+_CHAT_TIMEOUT_SECONDS = 120
+
+# Emitted by the platform's router, not the application, so the body is an HTML error page.
+_GATEWAY_STATUSES = frozenset({502, 503, 504})
 
 
 class ApiError(Exception):
@@ -23,14 +28,26 @@ class ApiError(Exception):
         super().__init__(f"{status_code}: {detail}")
 
 
+def _fallback_detail(status_code: int) -> str:
+    """A message safe to show a user when the body carries no usable one."""
+    if status_code in _GATEWAY_STATUSES:
+        return "The backend is unavailable or still starting up. Please try again in a moment."
+    return f"Unexpected response from the backend (HTTP {status_code})."
+
+
 def _handle_response(response: requests.Response) -> dict:
-    """Return the decoded body, or raise `ApiError` describing the failure."""
+    """Return the decoded body, or raise `ApiError` describing the failure.
+
+    A failure does not necessarily come from the application: a platform gateway answering 502
+    returns a full HTML error page. Falling back to `response.text` put that entire document in
+    the UI, so a non-JSON body is replaced with a short message instead.
+    """
     if response.ok:
         return response.json()
     try:
-        detail = response.json().get("detail", response.text)
+        detail = response.json().get("detail") or _fallback_detail(response.status_code)
     except ValueError:
-        detail = response.text
+        detail = _fallback_detail(response.status_code)
     raise ApiError(response.status_code, detail)
 
 
