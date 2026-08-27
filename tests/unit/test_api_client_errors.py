@@ -66,3 +66,22 @@ def test_successful_response_is_returned():
 def test_auth_timeout_survives_a_cold_start():
     """52s measured on Render's free tier; a 10s timeout failed every cold start."""
     assert api_client._AUTH_TIMEOUT_SECONDS >= 60
+
+
+def test_slowapi_rate_limit_message_is_preserved():
+    """slowapi answers with {"error": ...}, not FastAPI's {"detail": ...}. Reading only "detail"
+    turned a clear rate-limit message into the generic fallback."""
+    with pytest.raises(api_client.ApiError) as exc:
+        api_client._handle_response(
+            _Response(429, payload={"error": "Rate limit exceeded: 5 per 1 minute"})
+        )
+    assert exc.value.detail == "Rate limit exceeded: 5 per 1 minute"
+    assert exc.value.status_code == 429
+
+
+def test_detail_wins_when_both_keys_are_present():
+    with pytest.raises(api_client.ApiError) as exc:
+        api_client._handle_response(
+            _Response(400, payload={"detail": "from app", "error": "other"})
+        )
+    assert exc.value.detail == "from app"

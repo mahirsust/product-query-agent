@@ -45,7 +45,13 @@ def _handle_response(response: requests.Response) -> dict:
     if response.ok:
         return response.json()
     try:
-        detail = response.json().get("detail") or _fallback_detail(response.status_code)
+        payload = response.json()
+        # FastAPI raises HTTPException as {"detail": ...}; slowapi's rate-limit handler answers
+        # with {"error": ...} instead. Reading only "detail" turned a clear "Rate limit exceeded"
+        # into the generic fallback below.
+        detail = (
+            payload.get("detail") or payload.get("error") or _fallback_detail(response.status_code)
+        )
     except ValueError:
         detail = _fallback_detail(response.status_code)
     raise ApiError(response.status_code, detail)

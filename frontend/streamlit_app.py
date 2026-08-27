@@ -81,6 +81,12 @@ def _render_auth_screen() -> None:
             except ApiError as exc:
                 if exc.status_code == 401:
                     st.error("Invalid username or password.")
+                elif exc.status_code == 429:
+                    # Auth is capped at 5/minute. Retrying through a slow cold start is enough to
+                    # trip it, so say what to do rather than reporting an anonymous failure.
+                    st.warning("Too many sign-in attempts. Wait a minute, then try again.")
+                elif exc.status_code in (502, 503, 504):
+                    st.warning(exc.detail)
                 else:
                     st.error(f"Login failed: {exc.detail}")
             except requests.exceptions.RequestException:
@@ -104,6 +110,10 @@ def _render_auth_screen() -> None:
             except ApiError as exc:
                 if exc.status_code == 409:
                     st.error("That username is already taken.")
+                elif exc.status_code == 429:
+                    st.warning("Too many sign-up attempts. Wait a minute, then try again.")
+                elif exc.status_code in (502, 503, 504):
+                    st.warning(exc.detail)
                 else:
                     st.error(f"Signup failed: {exc.detail}")
             except requests.exceptions.RequestException:
