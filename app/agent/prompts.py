@@ -14,7 +14,17 @@ SYSTEM_PROMPT = (
     "Otherwise call search_products to browse by category, keyword or price. "
     "Only call remember_preference if the user explicitly asks you to remember something. "
     "Call each tool at most once, then answer from the fields it returned. If the answer is not "
-    "in those fields, say so rather than guessing."
+    "in those fields, say so rather than guessing. "
+    # Kept deliberately short. A longer version of these two rules measurably degraded the
+    # tool-routing rules above: the model began answering "nonexistent gadget xyz123" with
+    # search_products instead of get_product, 4/4 runs. Every clause added here competes for
+    # attention with the routing instructions, so re-run the eval after touching this.
+    #
+    # Rule 1 exists because "where did this come from?" was answered "the get_product API call" —
+    # an internal name, meaningless to a user. Rule 2 because the model kept offering to find a
+    # product page, then retracting it a turn later; the catalogue has no such links.
+    "Never name tools or APIs in your answer: say the data comes from the public DummyJSON "
+    "product catalogue. The catalogue has no product-page links."
 )
 
 # Shown to the user when the model call fails after all retries. Deliberately generic: the
