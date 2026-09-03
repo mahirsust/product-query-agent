@@ -26,8 +26,8 @@ username to try it. Hosted on Render's free tier, so the first request after an 
 - **Auth and multi-tenancy** — JWT signup/login; threads, caches and memories are scoped per user.
 - **Cost controls** — five per-user caps (daily dollars, daily/minute calls, daily/minute tokens),
   a per-user response cache, and a product cache with its own TTL.
-- **Evaluated** — a 12-case golden dataset gates changes with a pass-rate threshold and a
-  groundedness check.
+- **Evaluated** — a 14-case golden dataset gates changes with a pass-rate threshold, a must-pass
+  subset checked case-by-case, and a groundedness check.
 
 ## Architecture
 
@@ -175,7 +175,7 @@ Three suites, deliberately separated by what they cost to run:
 - `tests/unit` — pure logic, `fakeredis`, in-memory SQLite. No network, no LLM quota.
 - `tests/integration` — FastAPI routes through `TestClient` with a fake agent. Needs a local Redis
   for the real rate limiter; no LLM quota.
-- `tests/eval` — the 12-case golden dataset against real Groq and real DummyJSON. This is the CI
+- `tests/eval` — the 14-case golden dataset against real Groq and real DummyJSON. This is the CI
   gate, and the only suite that spends quota. Run `alembic upgrade head` first.
 
 ### Dependency groups
