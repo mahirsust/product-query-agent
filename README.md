@@ -11,10 +11,6 @@ auth, Postgres, Redis, and product data fetched through an MCP server from the p
 
 The LLM backend is Groq (`openai/gpt-oss-120b`).
 
-**Live demo:** <https://product-query-agent-frontend-latest.onrender.com> — sign up with any
-username to try it. Hosted on Render's free tier, so the first request after an idle period takes
-30–60 seconds while the service wakes.
-
 ## Features
 
 - **Tool-calling agent** over an MCP server — two deliberately flat tools, kept small because tool
