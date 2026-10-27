@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/mahirsust/product-query-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mahirsust/product-query-agent/actions/workflows/ci.yml)
 [![Deploy](https://github.com/mahirsust/product-query-agent/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/mahirsust/product-query-agent/actions/workflows/deploy.yml)
-[![Live](https://img.shields.io/badge/live-render-46E3B7)](https://product-query-agent-frontend-latest.onrender.com)
 
 A production-shaped LangChain/LangGraph tool-calling agent that answers questions about product
 prices, specs, stock and reviews. It runs as a Streamlit chat UI over a FastAPI backend, with JWT
